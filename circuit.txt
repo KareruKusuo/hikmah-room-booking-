@@ -1,0 +1,125 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+
+#define PIR_PIN D5      
+#define BUZZER_PIN D1   
+
+const char* ssid = "khaslana";
+const char* password = "1sampai8";
+const char* serverURL = "http://172.20.10.2:5000";
+
+bool systemActive = false;
+unsigned long lastStatusCheck = 0;
+const unsigned long CHECK_INTERVAL = 3000; 
+
+static int motionCount = 0;
+static unsigned long firstMotionTime = 0;
+static unsigned long lastPresenceSent = 0;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(PIR_PIN, INPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, HIGH); 
+
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
+  
+  Serial.println("\n--- MAIN BOARD ONLINE ---");
+  digitalWrite(BUZZER_PIN, LOW); delay(100); digitalWrite(BUZZER_PIN, HIGH);
+}
+
+void loop() {
+  // 1. RFID Receiver
+  if (Serial.available()) {
+    String data = Serial.readStringUntil('\n');
+    data.trim();
+    if (data.startsWith("RFID:")) {
+      String cardId = data.substring(5);
+      Serial.println(">>> RFID RECEIVED: " + cardId);
+      sendRFID(cardId);
+    }
+  }
+
+  unsigned long now = millis();
+
+  // 2. Bookkeeping & Heartbeat
+  if (now - lastStatusCheck > CHECK_INTERVAL) {
+    checkStatus();
+    lastStatusCheck = now;
+    // HEARTBEAT: Tells you the state of the system
+    Serial.print("System State: ");
+    Serial.println(systemActive ? "ACTIVE (Monitoring PIR)" : "IDLE (Waiting for Booking)");
+  }
+
+  // 3. PIR SENSOR FILTER (With Serial Feedback)
+  if (systemActive) {
+    if (digitalRead(PIR_PIN) == HIGH) {
+      if (motionCount == 0) firstMotionTime = now;
+      motionCount++;
+      
+      // Print every hit so you can see the sensor working
+      Serial.print("Motion Hit! Count: ");
+      Serial.println(motionCount);
+
+      if (motionCount >= 3 && (now - firstMotionTime) < 3000) {
+        if (now - lastPresenceSent > 15000) {
+          Serial.println("!!! PRESENCE CONFIRMED - Sending to Server !!!");
+          sendPresence();
+          lastPresenceSent = now;
+        }
+        motionCount = 0;
+      }
+    }
+
+    // Reset counter if too much time passes between hits
+    if (motionCount > 0 && (now - firstMotionTime) > 3000) {
+      Serial.println("Motion timeout: Resetting hit counter.");
+      motionCount = 0;
+    }
+  }
+  yield();
+}
+
+void checkStatus() {
+  WiFiClient client;
+  HTTPClient http;
+  http.begin(client, String(serverURL) + "/status");
+  if (http.GET() == 200) {
+    String payload = http.getString();
+    if (systemActive && payload.indexOf("\"state\": \"AVAILABLE\"") >= 0) {
+      Serial.println("ALERT: Server released room. Stopping PIR.");
+      systemActive = false;
+      for(int i=0; i<3; i++) { digitalWrite(BUZZER_PIN, LOW); delay(500); digitalWrite(BUZZER_PIN, HIGH); delay(200); }
+    }
+  }
+  http.end();
+}
+
+void sendRFID(String cardId) {
+  WiFiClient client;
+  HTTPClient http;
+  http.begin(client, String(serverURL) + "/rfid_scan");
+  http.addHeader("Content-Type", "application/json");
+  String payload = "{\"room_id\":1,\"card_id\":\"" + cardId + "\"}";
+  int code = http.POST(payload);
+  if (code > 0) {
+    String response = http.getString();
+    Serial.println("Server RFID Response: " + response);
+    if (response.indexOf("SUCCESS") >= 0 || response.indexOf("BOOKED") >= 0) {
+      systemActive = true;
+      digitalWrite(BUZZER_PIN, LOW); delay(100); digitalWrite(BUZZER_PIN, HIGH); delay(100);
+      digitalWrite(BUZZER_PIN, LOW); delay(100); digitalWrite(BUZZER_PIN, HIGH);
+    } else if (response.indexOf("RELEASED") >= 0) {
+      systemActive = false;
+      digitalWrite(BUZZER_PIN, LOW); delay(300); digitalWrite(BUZZER_PIN, HIGH);
+    }
+  }
+}
+
+void sendPresence() {
+  WiFiClient client;
+  HTTPClient http;
+  http.begin(client, String(serverURL) + "/sensor/presence/1");
+  http.POST("");
+}

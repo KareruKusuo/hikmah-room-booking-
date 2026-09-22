@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>H.I.K.M.A.H</title>
+  <style>
+    body { font-family: Arial; margin:0; padding:20px; background:#f5f5f5; }
+    .header { text-align:center; margin-bottom:40px; }
+    .rooms-grid { display:grid; grid-template-columns: 1fr; max-width:500px; margin:0 auto; }
+    .room-card { background:white; padding:20px; border-radius:8px; box-shadow:0 2px 4px rgba(0,0,0,0.1); border-left:5px solid #4CAF50; }
+    .status { font-size:16px; padding:10px; border-radius:4px; margin-bottom:15px; text-align:center; font-weight:bold; }
+    .status.available { background:#e8f5e9; color:#2e7d32; border:2px solid #4CAF50; }
+    .status.awaiting_checkin { background:#fff3e0; color:#e65100; border:2px solid #FF9800; }
+    .status.in_use { background:#fce4ec; color:#c2185b; border:2px solid #E91E63; }
+    .button-group { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    button { padding:10px; border:none; border-radius:4px; cursor:pointer; font-weight:bold; }
+    .btn-book { background:#4CAF50; color:white; grid-column:span 2; }
+    .btn-reset { background:#f44336; color:white; grid-column:span 2; margin-top:10px; }
+  </style>
+</head>
+<body>
+  <div class="header"><h1>📚 H.I.K.M.A.H</h1></div>
+  <div class="rooms-grid">
+    <div class="room-card">
+      <div class="status" id="status-1">AVAILABLE</div>
+      <div id="timer" style="text-align:center; font-weight:bold; color:#2196F3; margin-bottom:10px;"></div>
+      <div id="info" style="text-align:center; color:#555; margin-bottom:10px;"></div>
+      <div class="button-group">
+        <button class="btn-book" onclick="bookRoom()">Book Room</button>
+        <button onclick="simulatePresence()">Simulate Presence</button>
+        <button onclick="releaseRoom()">Release</button>
+        <button class="btn-reset" onclick="resetRoom()">Reset System</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentRemaining = 0;
+
+    function updateDisplay() {
+      const timerEl = document.getElementById('timer');
+      if (currentRemaining > 0) {
+        const mins = Math.floor(currentRemaining / 60);
+        const secs = currentRemaining % 60;
+        timerEl.innerText = `⏳ Time Left: ${mins}m ${secs < 10 ? '0' : ''}${secs}s`;
+      } else { timerEl.innerText = ""; }
+    }
+
+    function refreshStatus() {
+      fetch('/status').then(r => r.json()).then(data => {
+        const room = data["1"];
+        document.getElementById('status-1').innerText = room.state.replace(/_/g, ' ');
+        document.getElementById('status-1').className = 'status ' + room.state.toLowerCase();
+        currentRemaining = room.remaining || 0;
+        updateDisplay();
+
+        const info = document.getElementById('info');
+        if (room.current_user) {
+          let text = `Current: ${room.current_user}`;
+          if (room.queue && room.queue.length > 0) {
+            text += ` · Queue: ${room.queue.join(', ')}`;
+          }
+          info.innerText = text;
+        } else {
+          info.innerText = '';
+        }
+      });
+    }
+
+    setInterval(() => { if (currentRemaining > 0) { currentRemaining--; updateDisplay(); } }, 1000);
+    setInterval(refreshStatus, 3000);
+    refreshStatus();
+
+    function bookRoom() { 
+      const id = prompt("Card ID:"); 
+      if(id) fetch('/rfid_scan', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({card_id:id})}).then(refreshStatus); 
+    }
+    function simulatePresence() { fetch('/sensor/presence/1', {method:'POST'}).then(refreshStatus); }
+    function releaseRoom() { fetch('/release/1', {method:'POST'}).then(refreshStatus); }
+    function resetRoom() { fetch('/reset/1', {method:'POST'}).then(refreshStatus); }
+  </script>
+</body>
+</html>
